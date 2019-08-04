@@ -19,13 +19,14 @@ class MultiMNIST(Dataset):
         Returns (X, y), where X is (H, W) in range (0, 1), y is the number of
         digits.
         """
-        # x: uint8, (H, W)
+        # x: uint8, (1, H, W)
         # y: ndarray: label
         x, y = self.X[index], self.y[index]
         y = np.array(len(y))
         x = x / 255.0
         
-        x, y = torch.from_numpy(x), torch.from_numpy(y)
+        x, y = torch.from_numpy(x).float(), torch.from_numpy(y).float()
+        x = x[None]
         
         return x, y
         
