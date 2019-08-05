@@ -9,6 +9,10 @@ from torch.distributions.normal import Normal
 from torch.distributions.kl import kl_divergence
 from copy import deepcopy
 from matplotlib import pyplot as plt
+from utils import vis_logger, metric_logger
+from config import cfg
+
+DEBUG = True
 
 # default air architecture
 default_arch = AttrDict({
@@ -27,14 +31,14 @@ default_arch = AttrDict({
     'decoder_hidden_size': 200,
     
     # priors
-    'z_pres_prob_prior': 0.5,
-    'z_where_loc_prior': torch.tensor([3.0, 0.0, 0.0]),
-    'z_where_scale_prior': torch.tensor([0.2, 1.0, 1.0]),
-    'z_what_loc_prior': torch.tensor(0.0),
-    'z_what_scale_prior': torch.tensor(1.0),
+    'z_pres_prob_prior': torch.tensor(0.01, device=cfg.device),
+    'z_where_loc_prior': torch.tensor([3.0, 0.0, 0.0], device=cfg.device),
+    'z_where_scale_prior': torch.tensor([0.2, 1.0, 1.0], device=cfg.device),
+    'z_what_loc_prior': torch.tensor(0.0, device=cfg.device),
+    'z_what_scale_prior': torch.tensor(1.0, device=cfg.device),
     
     # output prior
-    'x_scale': torch.tensor(0.3)
+    'x_scale': torch.tensor(0.3, device=cfg.device)
 })
 
 class SpatialTransformer(nn.Module):
@@ -70,14 +74,14 @@ class SpatialTransformer(nn.Module):
         B = z_where.size(0)
         
         if inverse:
-            z_where_inv = z_where.clone()
+            z_where_inv = torch.zeros_like(z_where, device=cfg.device)
             z_where_inv[:, 1:3] = -z_where[:, 1:3] / z_where[:, 0:1]
             z_where_inv[:, 0:1] = 1 / z_where[:, 0:1]
             z_where = z_where_inv
             
         # [0, s, x, y] -> [s, 0, x, 0, s, y]
-        z_where = torch.cat((torch.zeros(B, 1), z_where), dim=1)
-        expansion_indices = torch.LongTensor([1, 0, 2, 0, 1, 3])
+        z_where = torch.cat((torch.zeros(B, 1, device=cfg.device), z_where), dim=1)
+        expansion_indices = torch.tensor([1, 0, 2, 0, 1, 3], device=cfg.device)
         matrix = torch.index_select(z_where, dim=1, index=expansion_indices)
         matrix = matrix.view(B, 2, 3)
         
@@ -86,15 +90,16 @@ class SpatialTransformer(nn.Module):
         
     
 class AIRState(AttrDict):
-    def __init__(self, z_pres, z_where, z_what, h, c, bl_c, bl_h):
+    def __init__(self, z_pres, z_where, z_what, h, c, bl_c, bl_h, z_pres_p):
         """
-        Note that z_where is for image to object transformation
+        Note that z_where is for object to image transformation.
+        I add z_pres_p only for loggin purpose.
         """
         AttrDict.__init__(self,
             z_pres=z_pres,
             z_where=z_where,
             z_what=z_what,
-            h=h, c=c, bl_h=bl_h, bl_c=bl_c)
+            h=h, c=c, bl_h=bl_h, bl_c=bl_c, z_pres_p=z_pres_p)
         
     @staticmethod
     def get_intial_state(B, arch):
@@ -102,13 +107,14 @@ class AIRState(AttrDict):
         :param B: batch size
         """
         return AIRState(
-            z_pres=torch.ones(B, 1),
-            z_where=torch.zeros(B, 3),
-            z_what=torch.zeros(B, arch.z_what_size),
-            h=torch.zeros(B, arch.lstm_hidden_size),
-            c=torch.zeros(B, arch.lstm_hidden_size),
-            bl_c=torch.zeros(B, arch.baseline_hidden_size),
-            bl_h=torch.zeros(B, arch.baseline_hidden_size),
+            z_pres=torch.ones(B, 1, device=cfg.device),
+            z_where=torch.zeros(B, 3, device=cfg.device),
+            z_what=torch.zeros(B, arch.z_what_size, device=cfg.device),
+            h=torch.zeros(B, arch.lstm_hidden_size, device=cfg.device),
+            c=torch.zeros(B, arch.lstm_hidden_size, device=cfg.device),
+            bl_c=torch.zeros(B, arch.baseline_hidden_size, device=cfg.device),
+            bl_h=torch.zeros(B, arch.baseline_hidden_size, device=cfg.device),
+            z_pres_p=0
         )
 
 class Predict(nn.Module):
@@ -166,13 +172,12 @@ class Decoder(nn.Module):
         x = F.relu(self.fc1(z_what))
         x = self.fc2(x)
         x = x.view(-1, 1, self.h, self.w)
-        x = torch.sigmoid(x - 2)
+        x = torch.sigmoid(x - 2.0)
         return x
     
 
 
 class AIR(nn.Module):
-    counter = 0
     
     def __init__(self, arch=None):
         """
@@ -232,18 +237,38 @@ class AIR(nn.Module):
         # z_pres likelihood for each step
         z_pres_likelihood = []
         # learning signal for each step
-        learning_signal = torch.zeros(B, self.arch.max_steps)
-        # mask for nonexistent ones
-        mask = torch.ones(B, self.arch.max_steps)
+        learning_signal = torch.zeros(B, self.arch.max_steps, device=x.device)
+        # signal_mask (prev.z_pres)
+        signal_mask = torch.ones(B, self.arch.max_steps, device=x.device)
+        # mask (z_pres)
+        mask = torch.ones(B, self.arch.max_steps, device=x.device)
         # canvas
         h, w = self.arch.input_shape
-        canvas = torch.zeros(B, 1, h, w)
+        canvas = torch.zeros(B, 1, h, w, device=x.device)
+
+        if DEBUG:
+            vis_logger['image'] = x[0]
+            vis_logger['z_pres_p_list'] = []
+            vis_logger['z_pres_list'] = []
+            vis_logger['canvas_list'] = []
+            vis_logger['z_where_list'] = []
+            vis_logger['object_enc_list'] = []
+            vis_logger['object_dec_list'] = []
+            vis_logger['kl_pres_list'] = []
+            vis_logger['kl_what_list'] = []
+            vis_logger['kl_where_list'] = []
         
         for t in range(self.T):
+            # This is prev.z_pres. The only purpose is for masking learning signal.
+            signal_mask[:, t] = state.z_pres.squeeze()
+            
+            # all terms are already masked
             state, this_kl, this_baseline_value, this_z_pres_likelihood = self.infer_step(state, x)
             baseline_value.append(this_baseline_value.squeeze())
             kl.append(this_kl)
             z_pres_likelihood.append(this_z_pres_likelihood.squeeze())
+            
+            # add learning signal to depending terms (1:i-1)
             for j in range(t):
                 learning_signal[:, j] += this_kl.squeeze()
                 
@@ -251,19 +276,14 @@ class AIR(nn.Module):
             object = self.decoder(state.z_what)
             # (B, 1, H, W)
             img = self.object_to_image(object, state.z_where, inverse=False)
+            # Masking is crucial here.
             canvas = canvas + img * state.z_pres[:, :, None, None]
             
             mask[:, t] = state.z_pres.squeeze()
             
-        self.counter += 1
-        if self.counter % 20 == 0:
-            plt.subplot(2, 1, 1)
-            plt.imshow(canvas[0][0].cpu().detach().numpy())
-            plt.subplot(2, 1, 2)
-            plt.imshow(x[0][0].cpu().detach().numpy())
-            number = mask[0].sum()
-            plt.title('pred: {}'.format(number))
-            plt.savefig('logs/{}.png'.format(self.counter))
+            vis_logger['canvas_list'].append(canvas[0])
+            vis_logger['object_dec_list'].append(object[0])
+            
             
         baseline_value = torch.stack(baseline_value, dim=1)
         kl = torch.stack(kl, dim=1)
@@ -275,12 +295,13 @@ class AIR(nn.Module):
         # sum over data dimension
         likelihood = likelihood.view(B, -1).sum(1)
         
-        # construct surrogate loss
-        # reinforce term
-        learning_signal = learning_signal + likelihood[:, None]
-        learning_signal = learning_signal * mask
+        # Construct surrogate loss
+        # Note the MNIUS sign here !
+        learning_signal = learning_signal - likelihood[:, None]
+        learning_signal = learning_signal * signal_mask
         reinforce_term = (learning_signal.detach() - baseline_value.detach())* z_pres_likelihood
         reinforce_term = reinforce_term.sum(1)
+        # reinforce_term = torch.zeros_like(reinforce_term)
         
         # kl term, sum over batch dimension
         kl = kl.sum(1)
@@ -289,14 +310,20 @@ class AIR(nn.Module):
         # mean over batch dimension
         loss = loss.mean()
         
+        vis_logger['reinforce_loss']= (reinforce_term.mean())
+        vis_logger['kl_loss'] = (kl.mean())
+        vis_logger['neg_likelihood'] = (-likelihood.mean())
+        
         
         # compute baseline loss
         baseline_loss = F.mse_loss(baseline_value, learning_signal.detach())
-
-        losslist = (reinforce_term.mean(), kl.mean(), likelihood.mean(), baseline_loss)
-        print(*[x.item() for x in losslist])
         
-        return loss + baseline_loss
+        vis_logger['baseline_loss'] = baseline_loss
+
+        # losslist = (reinforce_term.mean(), kl.mean(), likelihood.mean(), baseline_loss)
+        # print(*[x.item() for x in losslist])
+        
+        return loss + baseline_loss, mask.sum(1)
         
 
     def infer_step(self, prev, x):
@@ -325,8 +352,10 @@ class AIR(nn.Module):
         z_pres_post = Bernoulli(z_pres_p)
         z_pres = z_pres_post.sample()
         z_pres = z_pres * prev.z_pres
-        # likelihood
-        z_pres_likelihood = z_pres_post.log_prob(z_pres) * z_pres
+        
+        # Likelihood. Note we must use prev.z_pres instead of z_pres because
+        # p(z_pres[i]=0|z_prse[i]=1) is non-zero.
+        z_pres_likelihood = z_pres_post.log_prob(z_pres) * prev.z_pres
         # (B,)
         z_pres_likelihood = z_pres_likelihood.squeeze()
         
@@ -350,19 +379,38 @@ class AIR(nn.Module):
         bl_h, bl_c = self.bl_rnn(lstm_input.detach(), (prev.bl_h, prev.bl_c))
         # (B,)
         baseline_value = self.bl_predict(bl_h).squeeze()
-        baseline_value = baseline_value * z_pres.squeeze()
+        # If z_pres[i-1] is 0, the reinforce term will not be dependent on phi.
+        # In this case, we don't need the term. So we set it to zero.
+        # At the same time, we must set learning signal to zero as this will
+        # matter in baseline loss computation.
+        baseline_value = baseline_value * prev.z_pres.squeeze()
         
-        # compute KL as we go, sum over data dimension
+        # Compute KL as we go, sum over data dimension
         kl_pres = kl_divergence(z_pres_post, self.pres_prior.expand(z_pres_post.batch_shape)).sum(1)
         kl_where = kl_divergence(z_where_post, self.where_prior.expand(z_where_post.batch_shape)).sum(1)
         kl_what = kl_divergence(z_what_post, self.what_prior.expand(z_what_post.batch_shape)).sum(1)
         
-        # mask out non-existent terms
-        kl = (kl_pres + kl_where + kl_what) * z_pres.squeeze()
+        # For where and what, when z_pres[i] is 0, they are determnisitic
+        kl_where = kl_where * z_pres.squeeze()
+        kl_what = kl_what * z_pres.squeeze()
+        # For pres, this is not the case. So we use prev.z_pres.
+        kl_pres = kl_pres * prev.z_pres.squeeze()
+        
+        kl = (kl_pres + kl_where + kl_what)
 
         # new state
         new_state = AIRState(z_pres=z_pres, z_where=z_where, z_what=z_what,
-                             h=h, c=c, bl_c=bl_c, bl_h=bl_h)
+                             h=h, c=c, bl_c=bl_c, bl_h=bl_h, z_pres_p=z_pres_p)
+        
+        # Logging
+        if DEBUG:
+            vis_logger['z_pres_p_list'].append(z_pres_p[0] * z_pres[0])
+            vis_logger['z_pres_list'].append(z_pres[0])
+            vis_logger['z_where_list'].append(z_where[0])
+            vis_logger['object_enc_list'].append(object[0])
+            vis_logger['kl_pres_list'].append(kl_pres.mean())
+            vis_logger['kl_what_list'].append(kl_what.mean())
+            vis_logger['kl_where_list'].append(kl_where.mean())
         
         return new_state, kl, baseline_value, z_pres_likelihood
     

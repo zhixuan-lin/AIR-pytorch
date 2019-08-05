@@ -3,3 +3,6 @@
 /logs/*
 __pycache__
 .idea
+notes.md
+.ipynb_checkpoints
+vis.ipynb
