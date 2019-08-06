@@ -1,9 +1,11 @@
 import os
 from attrdict import AttrDict
 cfg = AttrDict({
-    'exp_name': 'test',
+    # 'exp_name': 'test',
+    'exp_name': 'test_05',
+    # 'exp_name': 'noreinforce',
     'resume': True,
-    'device': 'cuda:5',
+    'device': 'cuda:0',
     'train': {
         'batch_size': 64,
         'model_lr': 1e-4,

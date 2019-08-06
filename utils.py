@@ -7,6 +7,8 @@ import torch
 from torch import nn
 from torch import optim
 from tensorboardX import SummaryWriter
+import matplotlib
+matplotlib.use('agg')
 from matplotlib import patches
 from matplotlib import pyplot as plt
 
@@ -214,7 +216,7 @@ class Checkpointer:
                 model.load_state_dict(checkpoint['model'])
                 optimizer.load_state_dict(checkpoint['optimizer'])
                 print('Load checkpoint from {}.'.format(model_list[-1]))
-                return checkpoint['epoch'] + 1
+                return checkpoint['epoch']
         
 
 vis_logger = VisLogger()

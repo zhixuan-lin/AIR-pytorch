@@ -75,9 +75,9 @@ if __name__ == '__main__':
                 metric_logger.update(acc_two=acc_two.item())
                 
                 
-                if (i + 1) % 20 == 0:
+                if (i + 1) % 50 == 0:
                     print('Epoch: {}/{}, Iter: {}/{}, Loss: {:.2f}, Acc: {:.2f}'.format(
-                        epoch + 1, 100, i + 1, len(trainloader), metric_logger['loss'].median,
+                        epoch + 1, cfg.train.max_epochs, i + 1, len(trainloader), metric_logger['loss'].median,
                         metric_logger['acc_total'].median))
                     vis_logger.add_to_tensorboard(writer, global_step)
                     writer.add_scalar('accuracy/total', acc_total, global_step)
@@ -85,7 +85,7 @@ if __name__ == '__main__':
                     writer.add_scalar('accuracy/one', acc_one, global_step)
                     writer.add_scalar('accuracy/two', acc_two, global_step)
                     
-            checkpointer.save(model, optimizer, epoch)
+            checkpointer.save(model, optimizer, epoch+1)
             
             
             

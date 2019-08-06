@@ -8,7 +8,6 @@ from torch.distributions.bernoulli import Bernoulli
 from torch.distributions.normal import Normal
 from torch.distributions.kl import kl_divergence
 from copy import deepcopy
-from matplotlib import pyplot as plt
 from utils import vis_logger, metric_logger
 from config import cfg
 from torch import autograd
@@ -32,7 +31,7 @@ default_arch = AttrDict({
     'decoder_hidden_size': 200,
     
     # priors
-    'z_pres_prob_prior': torch.tensor(0.01, device=cfg.device),
+    'z_pres_prob_prior': torch.tensor(0.5, device=cfg.device),
     'z_where_loc_prior': torch.tensor([3.0, 0.0, 0.0], device=cfg.device),
     'z_where_scale_prior': torch.tensor([0.2, 1.0, 1.0], device=cfg.device),
     'z_what_loc_prior': torch.tensor(0.0, device=cfg.device),
@@ -270,7 +269,12 @@ class AIR(nn.Module):
             z_pres_likelihood.append(this_z_pres_likelihood.squeeze())
             
             # add learning signal to depending terms (1:i-1)
-            for j in range(t):
+            # NOTE: kl of z_pres of current step does not depends on sample from
+            # z_pres, but kl of z_where and z_what DOES. They cannot be excluded
+            # from learning signal. So here we use t + 1 instead of t. Although
+            # this also includes kl of z_pres of current step, this will not
+            # matter too much
+            for j in range(t + 1):
                 learning_signal[:, j] += this_kl.squeeze()
                 
             # reconstruct
