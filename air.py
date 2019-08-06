@@ -11,6 +11,7 @@ from copy import deepcopy
 from matplotlib import pyplot as plt
 from utils import vis_logger, metric_logger
 from config import cfg
+from torch import autograd
 
 DEBUG = True
 
@@ -321,7 +322,6 @@ class AIR(nn.Module):
         vis_logger['baseline_loss'] = baseline_loss
 
         # losslist = (reinforce_term.mean(), kl.mean(), likelihood.mean(), baseline_loss)
-        # print(*[x.item() for x in losslist])
         
         return loss + baseline_loss, mask.sum(1)
         
@@ -342,6 +342,7 @@ class AIR(nn.Module):
         lstm_input = torch.cat((x_flat, prev.z_where, prev.z_what, prev.z_pres), dim=1)
         h, c = self.lstm_cell(lstm_input, (prev.h, prev.c))
         
+        
         # Predict presence and location
         z_pres_p, z_where_loc, z_where_scale = self.predict(h)
         
@@ -349,6 +350,14 @@ class AIR(nn.Module):
         # for batch processing, we will do this anyway.
         
         # sample z_pres
+        z_pres_p = z_pres_p * prev.z_pres
+        
+        # NOTE: for numerical stability, if z_pres_p is 0 or 1, we will need to
+        # clamp it to within (0, 1), or otherwise the gradient will explode
+        eps = 1e-6
+        z_pres_p = z_pres_p + eps * (z_pres_p == 0).float() - eps * (z_pres_p == 1).float()
+        
+        
         z_pres_post = Bernoulli(z_pres_p)
         z_pres = z_pres_post.sample()
         z_pres = z_pres * prev.z_pres
@@ -372,7 +381,6 @@ class AIR(nn.Module):
         z_what_loc, z_what_scale = self.encoder(object)
         z_what_post = Normal(z_what_loc, z_what_scale)
         z_what = z_what_post.rsample()
-        # z_what *= prev.z_pres[:, None]
         
         
         # compute baseline for this z_pres

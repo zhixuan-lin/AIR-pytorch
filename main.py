@@ -11,6 +11,7 @@ from torch import optim
 from utils import vis_logger, metric_logger, Checkpointer
 from tensorboardX import SummaryWriter
 from config import cfg
+from torch import autograd
 
 
 if __name__ == '__main__':
@@ -42,49 +43,50 @@ if __name__ == '__main__':
     writer = SummaryWriter(logdir=os.path.join(cfg.logdir, cfg.exp_name))
     
     print('Start training')
-    for epoch in range(start_epoch, cfg.train.max_epochs):
-        for i, (x, num) in enumerate(trainloader):
-            global_step = epoch * len(trainloader) + i + 1
-            # pred: (B,)
-            x = x.to(device)
-            num = num.to(device)
-            loss, pred = model(x)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+    with autograd.detect_anomaly():
+        for epoch in range(start_epoch, cfg.train.max_epochs):
+            for i, (x, num) in enumerate(trainloader):
+                global_step = epoch * len(trainloader) + i + 1
+                # pred: (B,)
+                x = x.to(device)
+                num = num.to(device)
+                loss, pred = model(x)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                
+                # Evaluate accuracy
+                zero_indices = num == 0
+                one_indices = num == 1
+                two_indices = num == 2
+                correct = (pred == num)
+                correct_zero = (correct & zero_indices)
+                correct_one = (correct & one_indices)
+                correct_two = (correct & two_indices)
+                acc_total = correct.float().mean()
+                acc_zero = correct_zero.float().sum() / (zero_indices.sum() + 1e-5)
+                acc_one = correct_one.float().sum() / (one_indices.sum() + 1e-5)
+                acc_two = correct_two.float().sum() / (two_indices.sum() + 1e-5)
+                
+                metric_logger.update(loss=loss.item())
+                metric_logger.update(acc_total=acc_total.item())
+                metric_logger.update(acc_zero=acc_zero.item())
+                metric_logger.update(acc_one=acc_one.item())
+                metric_logger.update(acc_two=acc_two.item())
+                
+                
+                if (i + 1) % 20 == 0:
+                    print('Epoch: {}/{}, Iter: {}/{}, Loss: {:.2f}, Acc: {:.2f}'.format(
+                        epoch + 1, 100, i + 1, len(trainloader), metric_logger['loss'].median,
+                        metric_logger['acc_total'].median))
+                    vis_logger.add_to_tensorboard(writer, global_step)
+                    writer.add_scalar('accuracy/total', acc_total, global_step)
+                    writer.add_scalar('accuracy/zero', acc_zero, global_step)
+                    writer.add_scalar('accuracy/one', acc_one, global_step)
+                    writer.add_scalar('accuracy/two', acc_two, global_step)
+                    
+            checkpointer.save(model, optimizer, epoch)
             
-            # Evaluate accuracy
-            zero_indices = num == 0
-            one_indices = num == 1
-            two_indices = num == 2
-            correct = (pred == num)
-            correct_zero = (correct & zero_indices)
-            correct_one = (correct & one_indices)
-            correct_two = (correct & two_indices)
-            acc_total = correct.float().mean()
-            acc_zero = correct_zero.float().sum() / (zero_indices.sum() + 1e-5)
-            acc_one = correct_one.float().sum() / (one_indices.sum() + 1e-5)
-            acc_two = correct_two.float().sum() / (two_indices.sum() + 1e-5)
-            
-            metric_logger.update(loss=loss.item())
-            metric_logger.update(acc_total=acc_total.item())
-            metric_logger.update(acc_zero=acc_zero.item())
-            metric_logger.update(acc_one=acc_one.item())
-            metric_logger.update(acc_two=acc_two.item())
             
             
-            if (i + 1) % 20 == 0:
-                print('Epoch: {}/{}, Iter: {}/{}, Loss: {:.2f}, Acc: {:.2f}'.format(
-                    epoch + 1, 100, i + 1, len(trainloader), metric_logger['loss'].median,
-                    metric_logger['acc_total'].median))
-                vis_logger.add_to_tensorboard(writer, global_step)
-                writer.add_scalar('accuracy/total', acc_total, global_step)
-                writer.add_scalar('accuracy/zero', acc_zero, global_step)
-                writer.add_scalar('accuracy/one', acc_one, global_step)
-                writer.add_scalar('accuracy/two', acc_two, global_step)
-                
-        checkpointer.save(model, optimizer, epoch)
-                
-                
-                
-                
+            
