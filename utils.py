@@ -11,6 +11,7 @@ import matplotlib
 matplotlib.use('agg')
 from matplotlib import patches
 from matplotlib import pyplot as plt
+from torch.distributions.bernoulli import  Bernoulli
 
 
 class VisLogger:
@@ -217,6 +218,53 @@ class Checkpointer:
                 optimizer.load_state_dict(checkpoint['optimizer'])
                 print('Load checkpoint from {}.'.format(model_list[-1]))
                 return checkpoint['epoch']
+            
+class PriorScheduler:
+    def __init__(self, initial, final, total_steps, interval, model, device):
+        self.initial = initial
+        self.final = final
+        self.total_steps = total_steps
+        self.interval = interval
+        self.model = model
+        self.device = device
+        self.current_step = 0
+        self.current = initial
+        
+        
+    def step(self):
+        self.current_step += 1
+        if self.current_step > self.total_steps:
+            return
+        
+        if self.current_step % self.interval == 0:
+            ratio = self.current_step / self.total_steps
+            prob = self.initial + ratio * (self.final - self.initial)
+            self.model.z_pres_prob_prior = Bernoulli(torch.tensor(prob, device=self.device))
+            self.current = prob
+            
+class WeightScheduler:
+    def __init__(self, initial, final, total_steps, interval, model, device):
+        self.initial = initial
+        self.final = final
+        self.total_steps = total_steps
+        self.interval = interval
+        self.model = model
+        self.device = device
+        self.current_step = 0
+        self.current = initial
+    
+    
+    def step(self):
+        self.current_step += 1
+        if self.current_step > self.total_steps:
+            return
+        
+        if self.current_step % self.interval == 0:
+            ratio = self.current_step / self.total_steps
+            weight = self.initial + ratio * (self.final - self.initial)
+            self.model.reinforce_weight = weight
+            self.current = weight
+            
         
 
 vis_logger = VisLogger()

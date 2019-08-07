@@ -31,7 +31,9 @@ default_arch = AttrDict({
     'decoder_hidden_size': 200,
     
     # priors
-    'z_pres_prob_prior': torch.tensor(0.5, device=cfg.device),
+    # 'z_pres_prob_prior': torch.tensor(0.5, device=cfg.device),
+    'z_pres_prob_prior': torch.tensor(cfg.anneal.initial, device=cfg.device),
+    
     'z_where_loc_prior': torch.tensor([3.0, 0.0, 0.0], device=cfg.device),
     'z_where_scale_prior': torch.tensor([0.2, 1.0, 1.0], device=cfg.device),
     'z_what_loc_prior': torch.tensor(0.0, device=cfg.device),
@@ -190,6 +192,7 @@ class AIR(nn.Module):
             
             
         self.T = self.arch.max_steps
+        self.reinforce_weight = 0.0
         
         # 4: where + pres
         lstm_input_size = self.arch.input_size + self.arch.z_what_size + 4
@@ -311,7 +314,7 @@ class AIR(nn.Module):
         # kl term, sum over batch dimension
         kl = kl.sum(1)
         
-        loss = reinforce_term + kl - likelihood
+        loss = self.reinforce_weight * reinforce_term + kl - likelihood
         # mean over batch dimension
         loss = loss.mean()
         
@@ -416,7 +419,7 @@ class AIR(nn.Module):
         
         # Logging
         if DEBUG:
-            vis_logger['z_pres_p_list'].append(z_pres_p[0] * z_pres[0])
+            vis_logger['z_pres_p_list'].append(z_pres_p[0])
             vis_logger['z_pres_list'].append(z_pres[0])
             vis_logger['z_where_list'].append(z_where[0])
             vis_logger['object_enc_list'].append(object[0])
