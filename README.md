@@ -1,9 +1,6 @@
-# SQAIR-pytorch
-Pytorch Implementation of Sequential Attend, Infer, Repeat.
+# AIR
 
-## AIR
-
-I implemented AIR (neural baseline version) first. I anneal the weight of the reinforce term from 0 to 1 and presence prior probability from 0.5 to 0.01 and these stabilize training. Some localization examples:
+I implemented the neural baseline version). I anneal the weight of the reinforce term from 0 to 1 and presence prior probability from 0.5 to 0.01 and these stabilize training. Some localization examples:
 
 ![f2](pics/f2.png)
 
